@@ -13,6 +13,11 @@ from torchvision.transforms import Compose, Lambda, ToTensor
 from torchvision.transforms._transforms_video import NormalizeVideo, RandomCropVideo, RandomHorizontalFlipVideo, CenterCropVideo
 from pytorchvideo.transforms import ApplyTransformToKey, ShortSideScale, UniformTemporalSubsample
 
+import subprocess, json
+from fractions import Fraction
+
+
+
 decord.bridge.set_bridge('torch')
 
 OPENAI_DATASET_MEAN = (0.48145466, 0.4578275, 0.40821073)
@@ -31,7 +36,7 @@ def get_video_transform(config):
             transform=Compose(
                 [
                     UniformTemporalSubsample(config.num_frames),
-                    Lambda(lambda x: x / 255.0),
+                    Lambda(lambda x: x/255.0),
                     NormalizeVideo(mean=OPENAI_DATASET_MEAN, std=OPENAI_DATASET_STD),
                     ShortSideScale(size=224),
                     CenterCropVideo(224),
@@ -64,10 +69,60 @@ def get_video_transform(config):
                 RandomHorizontalFlipVideo(p=0.5),
             ]
         )
+    
+    elif config.video_decode_backend == 'eluvio':
+        transform = Compose(
+            [
+                # UniformTemporalSubsample(num_frames),
+                Lambda(lambda x: x / 255.0),
+                NormalizeVideo(mean=OPENAI_DATASET_MEAN, std=OPENAI_DATASET_STD),
+                ShortSideScale(size=224),
+                CenterCropVideo(224),
+                RandomHorizontalFlipVideo(p=0.5),
+            ]
+        )
     else:
         raise NameError('video_decode_backend should specify in (pytorchvideo, decord, opencv)')
     return transform
 
+
+def getUniformFrames(filename,num_frames):
+    cmd = ["ffprobe", "-v", "quiet", "-select_streams", "v", "-show_frames",
+            "-show_entries", "frame=width,height,pict_type:stream=r_frame_rate",
+            "-print_format", "json", filename]
+    try:
+        output = subprocess.check_output(cmd, stderr=subprocess.STDOUT)
+
+    except subprocess.CalledProcessError as e:
+        raise Exception(e.output.decode("utf-8"))
+    
+    output = json.loads(output)
+    
+    total_frames = len(output["frames"])
+    w, h = output["frames"][0]["width"], output["frames"][0]["height"]
+    fps = Fraction(output["streams"][0]["r_frame_rate"])
+    
+    d_frames = int(total_frames//num_frames)
+    select_str = "select='not(mod(n,"+str(d_frames)+")')"
+    print(select_str)
+    print('Total No. of Frames {}'.format(total_frames))
+
+    cmd = ["ffmpeg", "-nostdin", "-i", filename, "-vsync", "vfr",
+                "-vf", select_str, "-vframes", str(num_frames),
+                "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}", "pipe:"]
+
+    process = subprocess.Popen(cmd, stderr=-1, stdout=-1)
+    out, err = process.communicate()
+    retcode = process.poll()
+    if retcode:
+        raise Exception(f"ffmpeg error: {err.decode('utf-8')}")
+
+    frames = np.frombuffer(out, np.uint8)
+    frames = frames.reshape((-1, h, w, 3))
+
+    video_frames = torch.from_numpy(frames)
+    video_frames = video_frames.permute(3, 0, 1, 2)  # (T, H, W, C) -> (C, T, H, W)
+    return  video_frames
 
 def load_and_transform_video(
         video_path,
@@ -80,6 +135,7 @@ def load_and_transform_video(
     if video_decode_backend == 'pytorchvideo':
         #  decord pyav
         video = EncodedVideo.from_path(video_path, decoder="decord", decode_audio=False)
+        # video = EncodedVideo.from_path(video_path,decoder='pyav', decode_audio=False)
         duration = video.duration
         start_sec = clip_start_sec  # secs
         end_sec = clip_end_sec if clip_end_sec is not None else duration  # secs
@@ -94,6 +150,7 @@ def load_and_transform_video(
         video_data = decord_vr.get_batch(frame_id_list)
         video_data = video_data.permute(3, 0, 1, 2)  # (T, H, W, C) -> (C, T, H, W)
         video_outputs = transform(video_data)
+        # print(video_outputs.shape)
 
     elif video_decode_backend == 'opencv':
         cv2_vr = cv2.VideoCapture(video_path)
@@ -109,6 +166,13 @@ def load_and_transform_video(
         cv2_vr.release()
         video_data = torch.stack(video_data, dim=1)
         video_outputs = transform(video_data)
+    
+    elif video_decode_backend == 'eluvio':
+        num_frames = 8
+        video_frames = getUniformFrames(video_path,num_frames)
+        video_outputs = transform(video_frames)
+        # print(video_outputs.shape)
+    
     else:
         raise NameError('video_decode_backend should specify in (pytorchvideo, decord, opencv)')
     return video_outputs
@@ -124,6 +188,37 @@ class LanguageBindVideoProcessor(ProcessorMixin):
         self.image_processor = load_and_transform_video
         self.tokenizer = tokenizer
 
+    
+    def set_transform(self,type):
+        print('Setting Transform to {}'.format(type))
+        if type == 'pytorchvideo':
+            self.transform = ApplyTransformToKey(
+                key="video",
+                transform=Compose(
+                    [
+                        UniformTemporalSubsample(8),
+                        Lambda(lambda x: x/255.0),
+                        NormalizeVideo(mean=OPENAI_DATASET_MEAN, std=OPENAI_DATASET_STD),
+                        ShortSideScale(size=224),
+                        CenterCropVideo(224),
+                        RandomHorizontalFlipVideo(p=0.5),
+                    ]
+                ),
+            )
+
+        else:
+            self.transform = Compose(
+                [
+                    # UniformTemporalSubsample(num_frames),
+                    Lambda(lambda x: x / 255.0),
+                    NormalizeVideo(mean=OPENAI_DATASET_MEAN, std=OPENAI_DATASET_STD),
+                    ShortSideScale(size=224),
+                    CenterCropVideo(224),
+                    RandomHorizontalFlipVideo(p=0.5),
+                ]
+            )
+
+        
     def __call__(self, images=None, text=None, context_length=77, return_tensors=None, **kwargs):
         if text is None and images is None:
             raise ValueError("You have to specify either text or images. Both cannot be none.")
@@ -134,9 +229,17 @@ class LanguageBindVideoProcessor(ProcessorMixin):
 
         if images is not None:
             images = make_list_of_images(images)
-            image_features = [self.image_processor(image, self.transform,
+            if self.config.vision_config.video_decode_backend == 'pytorchvideo': 
+                image_features = [self.image_processor(image, self.transform,
+                                                   video_decode_backend=self.config.vision_config.video_decode_backend,
+                                                   num_frames=self.config.vision_config.num_frames)['video'] for image in images]
+
+            else: image_features = [self.image_processor(image, self.transform,
                                                    video_decode_backend=self.config.vision_config.video_decode_backend,
                                                    num_frames=self.config.vision_config.num_frames) for image in images]
+            
+
+           
             image_features = torch.stack(image_features)
 
         if text is not None and images is not None:

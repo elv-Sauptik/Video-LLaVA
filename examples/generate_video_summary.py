@@ -7,6 +7,7 @@ from videollava.mm_utils import tokenizer_image_token, get_model_name_from_path,
 import requests
 import argparse
 import time
+import os
 
 
 def downloadVideo(URL):
@@ -27,6 +28,8 @@ def generate(video_link, prompt, load_4bit = True, load_8bit = False, temperatur
     cache_dir = 'cache_dir'
 
     print('Loading Generative Model')
+    t0 = time.time()
+    
     model_name = get_model_name_from_path(model_path)
     tokenizer, model, processor, _ = load_pretrained_model(model_path, None, model_name, load_8bit, load_4bit, device=device, cache_dir=cache_dir)
     video_processor = processor['video']
@@ -34,11 +37,29 @@ def generate(video_link, prompt, load_4bit = True, load_8bit = False, temperatur
     conv = conv_templates[conv_mode].copy()
     roles = conv.roles
 
+    t1 = time.time()
+    total_load_model = t1-t0
+
+    # Change to FFMPEG - Uniform --> 'decord', 'eluvio'
+    video_processor.set_transform(args.backend)
+    video_processor.config.vision_config.video_decode_backend = args.backend
+    print('The Video Processor Backend = {}'.format(video_processor.config.vision_config.video_decode_backend))
+
+    t0 = time.time()
     video_tensor = video_processor(video, return_tensors='pt')['pixel_values']
     if type(video_tensor) is list:
         tensor = [video.to(model.device, dtype=torch.float16) for video in video_tensor]
     else:
         tensor = video_tensor.to(model.device, dtype=torch.float16)
+    
+    t1 = time.time()
+    total_process_video = t1-t0
+
+    
+    os.system('clear')
+
+
+    t0 = time.time()
 
     print(f"{roles[1]}: {inp}")
     inp = ' '.join([DEFAULT_IMAGE_TOKEN] * model.get_video_tower().config.num_frames) + '\n' + inp
@@ -61,7 +82,10 @@ def generate(video_link, prompt, load_4bit = True, load_8bit = False, temperatur
             stopping_criteria=[stopping_criteria])
 
     outputs = tokenizer.decode(output_ids[0, input_ids.shape[1]:]).strip()
-    return outputs
+
+    t1 = time.time()
+    total_generate_response = t1-t0
+    return outputs, total_load_model, total_process_video, total_generate_response
 
 def print_chatbot(output):
     for char in output:
@@ -77,9 +101,19 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description = 'Video Summary')
     
     parser.add_argument('-prompt',default = 'Generate the video summary', type = str,  help = "The user Prompt")
+    parser.add_argument('-backend',default = 'decord', type = str,  help = "The video Backend")
     parser.add_argument('-temperature',default = 0.1, type = float,  help = "The Temperature of the Prompt")
+    parser.add_argument('-load4bit', default = 0, type = int,  help = "Model Quantization" )
+    parser.add_argument('-load8bit', default = 0, type = int,  help = "Model Quantization" )
     parser.add_argument('-video_link',default = 'https://host-76-74-91-15.contentfabric.io/qlibs/ilib24CtWSJeVt9DiAzym8jB6THE9e7H/q/hq__4h2ZexvodR9BuGKTCFSKugEkb3o7ApzEukgACN5gDSuG35HqVukZfZDn9qhxiGKvNtticVaTon/rep/media_download/default/videovideo_1920x1080_h264@9500000?clip_start=6023.46&clip_end=6033.76&authorization=aessjc4BFDGcaPMtWMfU2WyaVkxv8FzE4jctQ2FxsRcpPWSPLJCNy2z2gaMVtE3HUKLYxMxB7hMw2pBaM5oexZFAH2DYksfUjRSSV5PwgxjpQNgRQGq2ZGCjze4P7Rt7fhm7k1atzUgKFHJqYWcwEjcVZhpa6HPdXEgE4BdzCiN5x4EwzXCAArS9sMx3S2ad2jec18ie4QLK4oATxYXJrjKajVorxwsLv9m5xvrSWQHW27yz3Br2PYMicjR4Q1wydZ6XubrTy91ihyKdAjYsypi9BMPspq6WPoqiFWZar4w9cBC1WoyEL2TYnsoCntnx9DQ3ugjKQzFuHvc3G3u5at7GwobmFE77LgvJUjfzsD4Qve1uUWRPa5hvqMeaQs7wEe5bCT5HKELCei&header-x_set_content_disposition=attachment%3Bfilename%3DTitle+-+Live+Recording+-+UEFA1+-+Wed+2023-10-25+%281920x1080%29+%2801-40-23+-+01-40-33%29.mp4', type = str,  help = "The downloadable Video Link!")
     args = parser.parse_args()  
-    output = generate(args.video_link, args.prompt, load_4bit = True, load_8bit = False, temperature = 0.1, device = torch.device('cuda:1'))
+
+    load_4bit, load_8bit = True, False
+    if args.load4bit: load_4bit, load_8bit = True, False
+    elif args.load8bit: load_4bit, load_8bit = False, True   # Throwing error!
+
+    output, total_load_model, total_process_video, total_generate_response = generate(args.video_link, args.prompt, load_4bit = load_4bit, load_8bit = load_8bit, temperature = args.temperature, device = torch.device('cuda:1'))
     print('OUTPUT')
     print_chatbot(output)
+
+    print('Computation Time : Load Model ={} s, Process Video ={} s, Inference (Generate Response) ={} s'.format(total_load_model, total_process_video, total_generate_response))
