@@ -9,6 +9,7 @@ def construct_shot_dummy_mp4(object_id: str, content_part_dir: str, shots: List[
     dummy_video_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "tmp", object_id)
     if not os.path.exists(dummy_video_path):
+        input(f"Press any key to agree to makeing new dir for {object_id}")
         os.makedirs(dummy_video_path)
 
     # get the parts
@@ -28,6 +29,9 @@ def construct_shot_dummy_mp4(object_id: str, content_part_dir: str, shots: List[
     cur_s = shots[0][0]
     cur_e = shots[0][1]
     shot = []
+
+    # flag: not shot info left
+    finish = False
 
     # loop all files
     for file in tqdm.tqdm(video_parts):
@@ -58,7 +62,8 @@ def construct_shot_dummy_mp4(object_id: str, content_part_dir: str, shots: List[
             elif i > cur_e:
                 # write the shot into mp4 file
                 cnt += 1
-                shot_file = os.path.join(dummy_video_path, f"shot_{cnt}.mp4")
+                shot_file = os.path.join(
+                    dummy_video_path, f"shot_{cnt:04}.mp4")
                 # dump shot to mp4
                 output = cv2.VideoWriter(
                     shot_file,
@@ -72,14 +77,23 @@ def construct_shot_dummy_mp4(object_id: str, content_part_dir: str, shots: List[
 
                 # update shot info
                 shots.pop(0)
-                cur_s = shots[0][0]
-                cur_e = shots[0][1]
-                shot = [f]
+                # check if there are still some shots
+                if len(shots) > 0:
+                    cur_s = shots[0][0]
+                    cur_e = shots[0][1]
+                    shot = [f]
+                else:
+                    finish = True
+                    break
             else:
                 continue
 
         # release cap
         cap.release()
+
+        # no shot left
+        if finish:
+            break
 
     # clean
     cv2.destroyAllWindows()
@@ -87,18 +101,18 @@ def construct_shot_dummy_mp4(object_id: str, content_part_dir: str, shots: List[
 
 if __name__ == "__main__":
     import json
-    object_id = "iq__3BCpFm5NquAuzCMqekkZX8rR3hF"
-    content_part_dir = "/ml/sony_movies/iq__3BCpFm5NquAuzCMqekkZX8rR3hF"
-    fps = 24000/1001
+    object_id = "iq__hDQZD2vPkpawtP9fBZ8gpkcrh8o"
+    content_part_dir = f"/ml/sony_movies/{object_id}"
+    tags_dir = f"/ml/sony_movie_tags/{object_id}"
+    fps = 2997/125
     input(f"Check fps for {object_id} is {fps}")
 
-    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "tmp", "shot_info", f"{object_id}.json")) as f:
+    with open(os.path.join(tags_dir, "shots.json")) as f:
         shot_track = json.load(f)
 
     shots = []
-    for part_idx in shot_track[object_id]:
-        for shot in shot_track[object_id][part_idx]:
-            shots.append([shot["start_time"], shot["end_time"]])
+    for shot in shot_track:
+        shots.append([shot["start_time"], shot["end_time"]])
 
     print(len(shots), "shots in total")
 
