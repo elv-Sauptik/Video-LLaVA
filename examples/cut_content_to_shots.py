@@ -34,7 +34,8 @@ def construct_shot_dummy_mp4(object_id: str, content_part_dir: str, shots: List[
     finish = False
 
     # loop all files
-    for file in tqdm.tqdm(video_parts):
+    bar = tqdm.tqdm(video_parts)
+    for file in bar:
         # frame buffer and indices buffer
         frames = []
         indices = []
@@ -42,7 +43,8 @@ def construct_shot_dummy_mp4(object_id: str, content_part_dir: str, shots: List[
         cap = cv2.VideoCapture(file)
         # check fps
         _fps = cap.get(5)
-        assert fps == _fps
+        bar.set_postfix_str(f"part {_fps}, expected fps: {fps}")
+        # assert fps == _fps
         # catch all frames
         while (True):
             ret, frame = cap.read()
@@ -101,10 +103,27 @@ def construct_shot_dummy_mp4(object_id: str, content_part_dir: str, shots: List[
 
 if __name__ == "__main__":
     import json
-    object_id = "iq__hDQZD2vPkpawtP9fBZ8gpkcrh8o"
-    content_part_dir = f"/ml/sony_movies/{object_id}"
-    tags_dir = f"/ml/sony_movie_tags/{object_id}"
-    fps = 2997/125
+
+    # object_id = "iq__3BCpFm5NquAuzCMqekkZX8rR3hF"
+    # content_part_dir = f"/ml/sony_movies/{object_id}"
+    # tags_dir = f"/ml/sony_movie_tags/{object_id}"
+    # fps = 24000/1001
+
+    # object_id = "iq__3VSr2CG4RpiqH1EsQSLEhuGLfyAx"
+    # content_part_dir = f"/ml/mgm_movies/{object_id}"
+    # tags_dir = f"/ml/mgm_movie_tags/{object_id}"
+    # fps = 24000/1001
+
+    # object_id = "iq__Fza2o2Xry75AMMwkSmaeyh3HJg3"
+    # content_part_dir = f"/ml/uefa_matches/{object_id}"
+    # tags_dir = f"/ml/uefa_match_tags/{object_id}"
+    # fps = 50.0
+
+    object_id = "iq__3WxSAwteTyum3YZ2sJYYuSkbGFq7"
+    content_part_dir = f"/ml/epcr_matches/{object_id}"
+    tags_dir = f"/ml/epcr_match_tags/{object_id}"
+    fps = 50.0
+
     input(f"Check fps for {object_id} is {fps}")
 
     with open(os.path.join(tags_dir, "shots.json")) as f:
@@ -112,7 +131,8 @@ if __name__ == "__main__":
 
     shots = []
     for shot in shot_track:
-        shots.append([shot["start_time"], shot["end_time"]])
+        if shot:
+            shots.append([shot["start_time"], shot["end_time"]])
 
     print(len(shots), "shots in total")
 

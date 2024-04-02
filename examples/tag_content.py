@@ -84,11 +84,18 @@ if __name__ == '__main__':
     parser.add_argument('--load4bit', action="store_true")
     parser.add_argument("--object_id", type=str, default="iq__3BCpFm5NquAuzCMqekkZX8rR3hF",
                         help="Content object Id")
+    parser.add_argument("--save_dir", type=str, default="/ml/sony_movie_tags",
+                        help="Tags save dir")
     args = parser.parse_args()
 
+    assert os.path.exists(os.path.join(
+        args.save_dir, args.object_id)), "Save path does not exist, please check"
+
     if args.load4bit:
+        input("Load model in 4 bit, press any key to confirm")
         load_4bit, load_8bit = True, False
     else:
+        input("load mode in 8 bit, press any key to confirm")
         load_4bit, load_8bit = False, True
 
     # load the model
@@ -111,7 +118,7 @@ if __name__ == '__main__':
     conv_mode = "llava_v1"
 
     # clear the outpuot while loading
-    os.system("clear")
+    # os.system("clear")
 
     # get shots prepared to tag
     shot_src = os.path.join(os.path.dirname(
@@ -128,11 +135,11 @@ if __name__ == '__main__':
                 model, video_processor, tokenizer,
                 conv, args.prompt,
                 os.path.join(shot_src, shot),
-                temperature=args.temperature, )
+                args.temperature, )
             res[_shot_int] = output
         except:
             res[_shot_int] = ""
 
     # write result
-    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "tmp", "captions", f"{args.object_id}.json"), "w") as f:
+    with open(os.path.join(args.save_dir, args.object_id, "video_llava_captions.json"), "w") as f:
         json.dump(res, f)
